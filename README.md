@@ -4,3 +4,5 @@ This library re-implements a closed-loop phase detection algorithm (from open-ep
 
 A mirror of this code with accompanying trodes software can be found here, in the PhaseDisrupt feature branch:
 https://bitbucket.org/mkarlsso/trodes/src/PhaseDisrupt/
+
+This implementation rides atop Loren Frank Lab's FSData/FSGui ripple-closed loop detection. This tool is a direct descendent of their closed-loop module.
