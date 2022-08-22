@@ -1,0 +1,5 @@
+#!/bin/tcsh
+# code to create a python wrapper for shared defines and structures 
+swig -python -c++ fsShared.i
+g++ -c -fpic fsShared_wrap.cxx -I/usr/local/include/python3.5m -I. 
+g++ -L/usr/local/lib/python3.5 -lpython3.5m -shared fsShared_wrap.o -o _fsShared.so 

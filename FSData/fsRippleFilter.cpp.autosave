@@ -1,0 +1,321 @@
+#include <fsDefines.h>
+#include <fsRippleFilterCoeff.h>
+
+
+extern FSDataInfo fsdatainfo;
+extern double fNumerator[NFILT];
+extern double fDenominator[NFILT];
+
+extern RippleFilterParameters rippleParm;
+extern PulseCommand rippleStimPulseCmd;
+extern CommandTimeInfo ctinfo;
+
+extern RippleFilterStatus ripFiltStat[MAX_ELECTRODES];
+extern SpeedFilterStatus speedFiltStat;
+
+int counter;
+
+int timeSinceLast;
+
+void InitSpatial(void)
+{
+    fprintf(stderr, "Initializing spatial variables\n");
+    spatialFiltStat.stimOn = false;
+    spatialFiltStat.lastChange = 0;
+    spatialFiltStat.lockoutTime = 500;
+    ResetSpeedData();
+}
+
+bool ProcessSpatialData(u32 xpos, u32 ypos)
+{
+    /* update the current location */
+    spatialParm.xpos = xpos;
+    spatialParm.ypos = ypos;
+
+
+    if (realtimeProcessingEnabled == 0) {
+        return 0;
+    }
+
+    /* check that the speed is in the right window */
+    if ((ratSpeed < spatialParm.minSpeed) ||
+        (ratSpeed > spatialParm.maxSpeed)) {
+        fprintf(stderr, "speed %f outside range\n", ratSpeed);
+        return 0;
+    }
+
+    return((xpos >= spatialParm.lowerLeftX) &&
+           (xpos <= spatialParm.upperRightX) &&
+           (ypos >= spatialParm.lowerLeftY) &&
+           (ypos <= spatialParm.upperRightY));
+}
+
+
+
+void sendSpatialStatusUpdate(void)
+{
+    char tmps[1000];
+
+    int offset = 0;
+
+    if (realtimeProcessingEnabled) {
+        offset += sprintf(tmps, "Spatial Stimulation ENABLED\n\n");
+    }
+    else {
+        offset += sprintf(tmps, "Spatial Stimulation disabled\n\n");
+    }
+
+    offset += sprintf(tmps + offset, "Rat location %d, %d\n\nStimulation: ",
+                      spatialParm.xpos, spatialParm.ypos);
+    if (spatialFiltStat.stimOn) {
+        sprintf(tmps + offset, "ON\n");
+    }
+    else {
+        sprintf(tmps + offset, "OFF\n");
+    }
+
+    SendMessage(client_data[SPIKE_MAIN].fd, DIO_RT_STATUS_SPATIAL_STIM, tmps, 1000);
+}
+
+
+
+RTFilterParameters::RTFilterParameters(void) {
+    InitRipple();
+    InitSpatial();
+}
+
+void InitRipple(void)
+{
+    RippleFilterStatus *rptr;
+    int i;
+
+
+    rippleParm.pulse_length = DIO_RT_DEFAULT_PULSE_LEN;
+    rippleParm.sampDivisor = DIO_RT_DEFAULT_SAMP_DIVISOR;
+    rippleParm.ripCoeff1 = DIO_RT_DEFAULT_RIPPLE_COEFF1;
+    rippleParm.ripCoeff2 = DIO_RT_DEFAULT_RIPPLE_COEFF2;
+    rippleParm.time_delay = DIO_RT_DEFAULT_RIPPLE_TIME_DELAY;
+    rippleParm.jitter = DIO_RT_DEFAULT_RIPPLE_JITTER;
+    rippleParm.ripple_threshold = DIO_RT_DEFAULT_RIPPLE_THRESHOLD;
+    rippleParm.n_above_thresh = DIO_RT_DEFAULT_RIPPLE_N_ABOVE_THRESH;
+    rippleParm.lockout = DIO_RT_DEFAULT_RIPPLE_LOCKOUT;
+    rippleParm.speed_threshold = DIO_RT_DEFAULT_RIPPLE_SPEED_THRESH;
+
+    //rippleStimPulseCmd = GenerateSimplePulseCmd(rippleParm.pulse_length);
+
+    ResetRippleData();
+    ResetRippleCounters();
+
+    ResetSpeedData();
+}
+
+void ResetSpeedData()
+{
+    memset(speedFiltStat.speed, 0, sizeof(double) * NSPEED_FILT_POINTS);
+    speedFiltStat.ind = NSPEED_FILT_POINTS - 1;
+    speedFiltStat.lastx = 0;
+    speedFiltStat.lasty = 0;
+}
+
+void ResetRippleData()
+{
+    int i;
+    RippleFilterStatus *rptr = ripFiltStat;
+
+    for (i = 0; i < MAX_ELECTRODE_NUMBER; i++, rptr++) {
+        memset(rptr, 0, sizeof(RippleFilterStatus));
+    }
+}
+
+void ResetRippleCounters(void)
+{
+    counter = 0;
+    timeSinceLast = 0;
+}
+
+double updateLastval(RippleFilterStatus *rptr, double d)
+{
+    int i;
+    double mn = 0;
+
+    for (i = 0; i < NLAST_VALS; i++) {
+        mn += rptr->lastval[i];
+    }
+
+    mn = mn / (double)NLAST_VALS;
+
+    rptr->lastval[rptr->lvind++] = d;
+
+    if (rptr->lvind == NLAST_VALS)
+        rptr->lvind = 0;
+
+    return mn;
+}
+
+double RippleFilter(RippleFilterStatus *rptr, double d)
+{
+    double val = 0;
+    int jind;
+    int i;
+
+    rptr->fX[rptr->filtind] = d;
+    rptr->fY[rptr->filtind] = 0;
+
+    for (i = 0; i < NFILT; i++) {
+        jind = (rptr->filtind + i) % NFILT;
+        val = val + rptr->fX[jind] * fNumerator[i] -
+              rptr->fY[jind] * fDenominator[i];
+    }
+    rptr->fY[rptr->filtind] = val;
+
+    rptr->filtind--;
+
+    if (rptr->filtind < 0)
+        rptr->filtind += NFILT;
+
+    return val;
+}
+
+
+int ProcessRippleData(short electnum, double d)
+{
+    int stim = 0;
+
+//  static double v = 0.0;
+//  static double posgain = 0.0;
+
+    static u32 lastStimTimestamp = 0;
+
+    double gain;
+    double rd;
+
+    RippleFilterStatus *rptr;
+
+    rptr = ripFiltStat + electnum;
+
+    timeSinceLast = ctinfo.timestamp - lastStimTimestamp;
+    /* --------------------------------------------------- */
+    /*
+       ARE WE IN LOCKOUT?
+     */
+    if (timeSinceLast < rippleParm.lockout) {
+        /* We're in lockout period: need to zero filter inputs. */
+        rd = RippleFilter(rptr, 0.0); // zero filter inputs
+        // test
+        rptr->currentVal = rptr->rippleMean;
+        return 0;
+    }
+    /* --------------------------------------------------- */
+
+    rd = RippleFilter(rptr, d); // (filter maintains state across calls)
+
+    /* --------------------------------------------------- */
+    /*
+       HAVE WE JUST STARTED?
+     */
+    /* Wait at least 10000 samples before starting to stimulate
+     * after ripple detection program is initially begun */
+    if (counter < 10000) {
+        counter++;
+        return 0;
+    }
+    /* --------------------------------------------------- */
+
+    /* --------------------------------------------------- */
+    /*
+       OK TO PROCESS DATA...
+     */
+    double y = fabs(rd); // y is absolute value of ripple filtered
+
+    /* Only update mean and standard deviation if NOT stimulating
+     * this stops the stimulation artifact from changing the values */
+    if (realtimeProcessingEnabled == 0) {
+        rptr->rippleMean = rptr->rippleMean + (y - rptr->rippleMean) / rippleParm.sampDivisor;
+        rptr->rippleSd = (fabs(y - rptr->rippleMean) - rptr->rippleSd) /
+                         (double)rippleParm.sampDivisor + rptr->rippleSd;
+    }
+
+
+    /* --------------------------------------------------- */
+    /* The goods from Jim. */
+    double df = y - rptr->currentVal;
+
+    if (df > 0) {
+        /* use the mean of the last 20 values to determine the gain for this increase */
+        gain = rippleParm.ripCoeff1;
+        rptr->posgain = updateLastval(rptr, gain); // update to include this point
+        rptr->currentVal = rptr->currentVal + df * rptr->posgain;
+    }
+    else {
+        /* the gain for the decrease is fixed */
+        gain = rippleParm.ripCoeff2;
+        rptr->posgain = updateLastval(rptr, gain); // update to include this point
+        rptr->currentVal = rptr->currentVal + df * gain;
+    }
+
+    //fprintf(stderr, "y = %2.2f, df = %2.2f, currentval = %2.2f, gain = %2.2f, pg = %2.2f\n", y, df, rptr->currentVal, gain, rptr->posgain);
+
+    /* --------------------------------------------------- */
+
+
+
+    /* Jim's algorithm outputs a magic value "v" which is roughly
+     * the envelope of ripple magnitude. Check to see if v has
+     * crossed threshold and stimulate if so. */
+
+    // The threshold is expressed in standard deviations above mean
+    rptr->currentThresh = rptr->rippleMean + rptr->rippleSd * rippleParm.ripple_threshold;
+    if (nAboveRippleThresh(ripFiltStat) >= rippleParm.n_above_thresh) {
+        stim = 1;
+    }
+
+    /* --------------------------------------------------- */
+    /*
+       LAST CHECKS:
+     */
+    if (realtimeProcessingEnabled == 0) // Escape here if we're not enabled to stimulate.
+        return 0;
+
+    if (ratSpeed > rippleParm.speed_threshold) // Escape if rat is running too fast (speed is too high)
+        return 0;
+    /* --------------------------------------------------- */
+    if (stim == 1) {
+        timeSinceLast = 0; // If we're going to stimulate, reset lockout counter
+        lastStimTimestamp = ctinfo.timestamp;
+    }
+    return stim;
+}
+
+int nAboveRippleThresh(RippleFilterStatus *rptr)
+{
+    int i, electnum;
+    int nAbove = 0;
+
+    for (i = 0; i <= fsdatainfo.ncont; i++) {
+        electnum = fsdatainfo.contnum[i];
+        if ((rptr[electnum].currentVal > rptr[electnum].currentThresh)) {
+            nAbove++;
+        }
+    }
+    return nAbove;
+}
+
+
+void sendRippleStatusUpdate(void)
+{
+    char tmps[1000];
+    int i, electnum, offset = 0;;
+
+    for (i = 0; i <= fsdatainfo.ncont; i++) {
+        electnum = fsdatainfo.contnum[i];
+        if (ripFiltStat[electnum].rippleMean != 0) {
+            offset += sprintf(tmps + offset, "Elect %d: Ripple mean (std): %2.2f (%2.2f)\n", electnum,
+                              ripFiltStat[electnum].rippleMean, ripFiltStat[electnum].rippleSd);
+        }
+    }
+    offset += sprintf(tmps + offset, "\nRat speed: %2.2f cm/sec\n", ratSpeed);
+    sprintf(tmps + offset, "\nTimestamps since last %ld\n", timeSinceLast);
+    SendFSMessage(DIO_RT_STATUS_RIPPLE_DISRUPT, tmps, 1000);
+}
+
+

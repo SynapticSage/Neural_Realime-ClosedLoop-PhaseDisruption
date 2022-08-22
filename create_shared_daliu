@@ -1,0 +1,5 @@
+#!/bin/bash
+# code to create a python wrapper for shared defines and structures 
+swig -python -c++ fsShared.i
+g++ -c -fpic fsShared_wrap.cxx -I/home/daliu/anaconda/envs/py3/include/python3.5m -I. 
+g++ -L/home/daliu/anaconda/envs/py3/lib -lpython3.5m -shared fsShared_wrap.o -o _fsShared.so 
