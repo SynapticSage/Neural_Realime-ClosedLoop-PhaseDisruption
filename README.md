@@ -10,7 +10,7 @@ My implementation rides atop Loren Frank Lab's FSData/FSGui ripple-closed loop d
 Below is an example of fast beta (20-30hz) phase disurption, with brain samples streaming at 1500hz. I can also acheive reliable theta wave  (6-12hz) disruption with this.
 ![Example of beta rhythm detection](https://github.com/SynapticSage/Realtime-neural-phaseDisruption/raw/master/beta_detection.png)
 
-Key capabilities of the suite:
+Key capabilities of this closed-loop code, old and new:
 
 ## Neural data acquisition
 
