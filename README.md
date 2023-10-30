@@ -39,4 +39,4 @@ Key capabilities of this closed-loop code, old and new:
 
 - C++ code and libraries optimized for real-time signal processing
 - Sub-millisecond latency from data acquisition to stimulation output
-- Runs reliably on commodity Linux workstations with no dropped data
+- Runs reliably on commodity Linux workstations with minimal dropped data
