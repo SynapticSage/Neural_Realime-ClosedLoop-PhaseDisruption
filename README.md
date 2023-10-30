@@ -22,7 +22,7 @@ Key capabilities of the suite:
 
 - Bandpass filters data to isolate oscillations like theta, beta, ripple bands
 - Detects amplitude, phases, and rhythmicity of neural signals 
-- Algorithms like spatial position tracking, ripple detection, theta phase targeting
+- Algorithms for spatial position, ripple , theta phase targeting
 
 ## Closed loop stimulation
 
